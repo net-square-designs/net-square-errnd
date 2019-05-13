@@ -4,9 +4,14 @@ namespace App\Http\Controllers\Auth;
 
 use App\User;
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Validator;
+// use Illuminate\Support\Facades\Hash;
+// use Illuminate\Support\Facades\Validator;
+use Illuminate\Http\Request;
+use Validator, DB, Hash, Mail;
+use JWTAuth;
+use Tymon\JWTAuth\Exceptions\JWTException;
 use Illuminate\Foundation\Auth\RegistersUsers;
+use App\User_verification;
 
 class RegisterController extends Controller
 {
@@ -28,7 +33,7 @@ class RegisterController extends Controller
      *
      * @var string
      */
-    protected $redirectTo = '/home';
+    // protected $redirectTo = '/home';
 
     /**
      * Create a new controller instance.
@@ -37,36 +42,79 @@ class RegisterController extends Controller
      */
     public function __construct()
     {
-        $this->middleware('guest');
+        // $this->middleware('guest');
     }
 
-    /**
-     * Get a validator for an incoming registration request.
-     *
-     * @param  array  $data
-     * @return \Illuminate\Contracts\Validation\Validator
-     */
-    protected function validator(array $data)
+    public function register(Request $request)
     {
-        return Validator::make($data, [
-            'name' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'string', 'email', 'max:255', 'unique:users'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
-        ]);
+        $credentials = $request->only('name', 'email', 'password');
+
+        $rules = [
+            'name' => 'required|max:255',
+            'email' => 'required|email|max:255|unique:users'
+        ];
+        $validator = Validator::make($credentials, $rules);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'error' => $validator->messages()]);
+        }
+
+        $name = $request->name;
+        $email = $request->email;
+        $password = $request->password;
+
+        $user = User::create(['name' => $name, 'email' => $email, 'password' => Hash::make($password)]);
+
+        // $token = JWTAuth::fromUser($user);
+        // return response()->json(compact('user', 'token'), 201);
+
+        $verification_code = str_random(30); //Generate verification code
+
+        // $verification = new User_verification();
+        // $verification->token = $verification_code;
+        // $user->verification()->save($verification);
+
+        // DB::table('user_verifications')->insert(['user_id' => $user->id, 'token' => $verification_code]);
+        // dd($verification_code);
+        DB::table('user_verifications')->insert(['user_id' => $user->id, 'token' => $verification_code]);
+
+        $subject = "Please verify your email address.";
+        // Mail::send(
+        //     'email.verify',
+        //     ['name' => $name, 'verification_code' => $verification_code],
+        //     function ($mail) use ($email, $name, $subject) {
+        //         $mail->from(getenv('FROM_EMAIL_ADDRESS'), "Errnd");
+        //         $mail->to($email, $name);
+        //         $mail->subject($subject);
+        //     }
+        // );
+
+        Mail::send('email.verify', array('verification_code' => $verification_code, 'name' => $user->name), function ($message) use ($user) {
+            $message->to($user->email, $user->name)->subject('Active your account !');
+        });
+
+        return response()->json(['success' => true, 'message' => 'Thanks for signing up! Please check your email to complete your registration.']);
+        // return response()->json(['success' => true, 'user' => $user, 'verification_code' => $verification_code]);
     }
 
-    /**
-     * Create a new user instance after a valid registration.
-     *
-     * @param  array  $data
-     * @return \App\User
-     */
-    protected function create(array $data)
+
+    public function verifyUser($verification_code)
     {
-        return User::create([
-            'name' => $data['name'],
-            'email' => $data['email'],
-            'password' => Hash::make($data['password']),
-        ]);
+        $check = DB::table('user_verifications')->where('token', $verification_code)->first();
+        if (!is_null($check)) {
+            $user = User::find($check->user_id);
+            if ($user->is_verified == 1) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Account already verified..'
+                ]);
+            }
+            $user->update(['is_verified' => 1]);
+            DB::table('user_verifications')->where('token', $verification_code)->delete();
+            return response()->json([
+                'success' => true,
+                'message' => 'You have successfully verified your email address.'
+            ]);
+        }
+        return response()->json(['success' => false, 'error' => "Verification code is invalid."]);
     }
 }
